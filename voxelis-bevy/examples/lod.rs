@@ -19,7 +19,7 @@ use bevy::{
     },
     window::PresentMode,
 };
-use bevy_egui::{EguiContexts, EguiPlugin, egui};
+use bevy_egui::{EguiContextPass, EguiContexts, EguiPlugin, egui};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 
 use voxelis::{Lod, MaxDepth, VoxInterner, world::VoxChunk};
@@ -39,6 +39,7 @@ pub struct World {
     pub interner: VoxInterner<i32>,
     pub chunk: VoxChunk,
     pub mesh: Handle<Mesh>,
+    pub mesh_entity: Option<Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -62,6 +63,7 @@ impl World {
             interner,
             chunk,
             mesh: Handle::default(),
+            mesh_entity: None,
         }
     }
 
@@ -101,7 +103,12 @@ impl World {
         self.mesh = meshes.add(mesh);
     }
 
-    pub fn regenerate_mesh(&mut self, meshes: &mut ResMut<Assets<Mesh>>, lod: Lod) {
+    pub fn regenerate_mesh(
+        &mut self,
+        commands: &mut Commands,
+        meshes: &mut ResMut<Assets<Mesh>>,
+        lod: Lod,
+    ) {
         let mut vertices = Vec::new();
         let mut normals = Vec::new();
         let mut indices = Vec::new();
@@ -116,11 +123,20 @@ impl World {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
 
-        meshes.insert(&mut self.mesh, mesh);
+        // meshes.insert(&mut self.mesh, mesh);
+        //INFO: the old code should work, but it doesn't.
+        //      Maybe thats and bevy 0.16.0 bug.
+        let handle = meshes.add(mesh);
+        self.mesh = handle.clone();
+
+        if let Some(entity) = self.mesh_entity {
+            commands.entity(entity).insert(Mesh3d(handle));
+        }
     }
 }
 
 fn lod_ui(
+    mut commands: Commands,
     mut contexts: EguiContexts,
     mut lod_settings: ResMut<LodSettings>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -132,7 +148,11 @@ fn lod_ui(
         );
 
         if response.changed() {
-            world.regenerate_mesh(&mut meshes, Lod::new(lod_settings.level as u8));
+            world.regenerate_mesh(
+                &mut commands,
+                &mut meshes,
+                Lod::new(lod_settings.level as u8),
+            );
             println!(
                 "LOD Level: {} voxels per axis: {}",
                 lod_settings.level,
@@ -149,10 +169,12 @@ fn setup_world(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut world: ResMut<World>,
 ) {
-    let mut cascade_shadow_config_builder = CascadeShadowConfigBuilder::default();
-    cascade_shadow_config_builder.first_cascade_far_bound = 50.0;
-    cascade_shadow_config_builder.minimum_distance = 0.1;
-    cascade_shadow_config_builder.maximum_distance = 100_000.0;
+    let mut _cascade_shadow_config_builder = CascadeShadowConfigBuilder {
+        first_cascade_far_bound: 50.0,
+        minimum_distance: 0.1,
+        maximum_distance: 100_000.0,
+        ..Default::default()
+    };
 
     commands.spawn((
         DirectionalLight {
@@ -210,13 +232,16 @@ fn setup_world(
     let world_position = world.chunk.get_world_position();
     let world_position = Vec3::new(world_position.x, 0.0, world_position.y);
 
-    commands
+    let entity = commands
         .spawn((
             Mesh3d(world.mesh.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_translation(world_position),
         ))
-        .insert(Name::new("Chunk".to_string()));
+        .insert(Name::new("Chunk".to_string()))
+        .id();
+
+    world.mesh_entity = Some(entity);
 }
 
 fn toggle_wireframe(
@@ -240,10 +265,16 @@ fn main() {
                 ..default()
             }),
             TemporalAntiAliasPlugin,
-            EguiPlugin,
+            EguiPlugin {
+                enable_multipass_for_primary_context: true,
+            },
             PanOrbitCameraPlugin,
-            WireframePlugin,
-            FrameTimeDiagnosticsPlugin,
+            WireframePlugin {
+                ..Default::default()
+            },
+            FrameTimeDiagnosticsPlugin {
+                ..Default::default()
+            },
             // ScreenDiagnosticsPlugin::default(),
             // ScreenFrameDiagnosticsPlugin,
             // ScreenEntityDiagnosticsPlugin,
@@ -256,6 +287,6 @@ fn main() {
         .init_resource::<LodSettings>()
         .add_systems(Startup, setup_world)
         .add_systems(Update, toggle_wireframe)
-        .add_systems(Update, lod_ui)
+        .add_systems(EguiContextPass, lod_ui)
         .run();
 }
