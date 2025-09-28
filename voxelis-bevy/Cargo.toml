@@ -31,3 +31,7 @@ path = "examples/lod.rs"
 [[example]]
 name = "greedy_meshing"
 path = "examples/greedy_meshing.rs"
+
+[[example]]
+name = "adaptive_lod"
+path = "examples/adaptive_lod.rs"
