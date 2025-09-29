@@ -22,6 +22,7 @@ rust-version = "1.88"
 [features]
 default = ["numeric_voxel_impls"]
 numeric_voxel_impls = []
+portable_simd = []
 vtm = ["dep:bitflags", "dep:byteorder", "dep:md-5", "dep:zstd"]
 memory_stats = []
 debug_trace_ref_counts = []

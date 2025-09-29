@@ -6,6 +6,7 @@
 #![warn(clippy::cargo)]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::if_not_else)]
+#![cfg_attr(feature = "portable_simd", feature(portable_simd))]
 
 pub mod core;
 pub mod interner;
