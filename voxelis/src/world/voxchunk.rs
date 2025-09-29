@@ -347,9 +347,9 @@ impl<T: VoxelTrait> VoxOpsMesh<T> for VoxChunk<T> {
 
         let voxel_size = self.voxel_size(lod);
 
-        let mut builder = OccupancyDataBuilder::default();
-
         let max_depth = self.max_depth(lod);
+        let voxels_per_axis = self.voxels_per_axis(lod) as usize;
+        let mut builder = OccupancyDataBuilder::new(voxels_per_axis);
 
         #[cfg(feature = "trace_greedy_timings")]
         let mut timings = GreedyTimings::default();

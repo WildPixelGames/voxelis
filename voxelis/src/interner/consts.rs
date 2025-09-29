@@ -2,7 +2,7 @@ use crate::BlockId;
 
 use super::Children;
 
-pub const MAX_ALLOWED_DEPTH: usize = 7;
+pub const MAX_ALLOWED_DEPTH: usize = 22;
 pub const MAX_CHILDREN: usize = 8;
 pub const NODE_TYPE_LEAF: u8 = 0;
 pub const NODE_TYPE_BRANCH: u8 = 1;

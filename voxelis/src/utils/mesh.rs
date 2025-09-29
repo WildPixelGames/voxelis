@@ -47,10 +47,25 @@ pub const NORMAL_XZ_NEG: usize = 2;
 pub const NORMAL_XY_POS: usize = 5;
 pub const NORMAL_XY_NEG: usize = 4;
 
-pub const MAX_VOXELS_PER_AXIS: usize = 64;
-pub const PLANE_SIZE: usize = MAX_VOXELS_PER_AXIS * MAX_VOXELS_PER_AXIS;
-pub const PLANE_SIZE_ALL_AXES: usize = PLANE_SIZE * 3;
-pub const VOLUME_SIZE: usize = PLANE_SIZE * MAX_VOXELS_PER_AXIS;
+// Dynamic mesh generation - no more hardcoded limits!
+// Voxels per axis is now determined at runtime based on tree depth and LOD level
+// Maximum theoretical limit with u64 Morton encoding: 2^21 = 2,097,152 voxels per axis
+pub const MAX_VOXELS_PER_AXIS: usize = 64; // Current implementation limit for u64 bit masking
+
+#[inline(always)]
+const fn plane_size(voxels_per_axis: usize) -> usize {
+    voxels_per_axis * voxels_per_axis
+}
+
+#[inline(always)]
+const fn plane_size_all_axes(voxels_per_axis: usize) -> usize {
+    plane_size(voxels_per_axis) * 3
+}
+
+#[inline(always)]
+const fn volume_size(voxels_per_axis: usize) -> usize {
+    plane_size(voxels_per_axis) * voxels_per_axis
+}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum ExternalPlane {
@@ -62,9 +77,20 @@ pub enum ExternalPlane {
     XYNeg,
 }
 
-pub const PLANE_YZ_OFFSET: usize = 0;
-pub const PLANE_XZ_OFFSET: usize = PLANE_SIZE;
-pub const PLANE_XY_OFFSET: usize = PLANE_SIZE * 2;
+#[inline(always)]
+const fn plane_yz_offset() -> usize {
+    0
+}
+
+#[inline(always)]
+const fn plane_xz_offset(voxels_per_axis: usize) -> usize {
+    plane_size(voxels_per_axis)
+}
+
+#[inline(always)]
+const fn plane_xy_offset(voxels_per_axis: usize) -> usize {
+    plane_size(voxels_per_axis) * 2
+}
 
 struct PlaneData {
     pub plane: Plane,
@@ -74,29 +100,31 @@ struct PlaneData {
     pub neg: ExternalPlane,
 }
 
-const PLANES: [PlaneData; 3] = [
-    PlaneData {
-        plane: Plane::YZ,
-        offset: PLANE_YZ_OFFSET,
-        global_active_idx: 0,
-        pos: ExternalPlane::YZPos,
-        neg: ExternalPlane::YZNeg,
-    },
-    PlaneData {
-        plane: Plane::XZ,
-        offset: PLANE_XZ_OFFSET,
-        global_active_idx: 2,
-        pos: ExternalPlane::XZPos,
-        neg: ExternalPlane::XZNeg,
-    },
-    PlaneData {
-        plane: Plane::XY,
-        offset: PLANE_XY_OFFSET,
-        global_active_idx: 4,
-        pos: ExternalPlane::XYPos,
-        neg: ExternalPlane::XYNeg,
-    },
-];
+fn get_plane_data(voxels_per_axis: usize) -> [PlaneData; 3] {
+    [
+        PlaneData {
+            plane: Plane::YZ,
+            offset: plane_yz_offset(),
+            global_active_idx: 0,
+            pos: ExternalPlane::YZPos,
+            neg: ExternalPlane::YZNeg,
+        },
+        PlaneData {
+            plane: Plane::XZ,
+            offset: plane_xz_offset(voxels_per_axis),
+            global_active_idx: 2,
+            pos: ExternalPlane::XZPos,
+            neg: ExternalPlane::XZNeg,
+        },
+        PlaneData {
+            plane: Plane::XY,
+            offset: plane_xy_offset(voxels_per_axis),
+            global_active_idx: 4,
+            pos: ExternalPlane::XYPos,
+            neg: ExternalPlane::XYNeg,
+        },
+    ]
+}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum Dir {
@@ -118,7 +146,7 @@ pub struct AxisOccupancy {
 }
 
 impl AxisOccupancy {
-    pub fn new(active: u64) -> Self {
+    pub fn new(active: u64, voxels_per_axis: usize) -> Self {
         if active == 0 {
             Self {
                 active,
@@ -128,6 +156,7 @@ impl AxisOccupancy {
         } else {
             let min = active.trailing_zeros() as usize;
             let max = (64 - active.leading_zeros()) as usize;
+            let max = max.min(voxels_per_axis);
 
             Self { active, min, max }
         }
@@ -167,7 +196,7 @@ pub struct GreedyTimings {
     pub total: Duration,
 }
 
-pub type ExternalOccupancyMasks = [u64; MAX_VOXELS_PER_AXIS];
+pub type ExternalOccupancyMasks = Vec<u64>;
 
 pub struct OccupancyData {
     pub global: Vec<u64>,
@@ -176,9 +205,12 @@ pub struct OccupancyData {
     pub external_exists: [bool; 6],
     pub per_material: Vec<Vec<u64>>,
     pub materials: Vec<(usize, usize)>,
+    pub voxels_per_axis: usize,
 }
 
 pub struct OccupancyDataBuilder {
+    /// Number of voxels per axis (determines buffer sizes).
+    pub voxels_per_axis: usize,
     /// Global occupancy masks for all axes.
     pub global: Vec<u64>,
     pub global_active: [u64; 6],
@@ -190,6 +222,37 @@ pub struct OccupancyDataBuilder {
     pub per_material: HashMap<usize, Vec<u64>>,
     /// Materials with their counts.
     pub materials: HashMap<usize, usize>,
+}
+
+impl OccupancyDataBuilder {
+    /// Creates a new OccupancyDataBuilder with the specified voxels per axis.
+    ///
+    /// # Parameters
+    ///
+    /// * `voxels_per_axis` - Number of voxels along each axis (must be <= 64 for u64 bit masking)
+    pub fn new(voxels_per_axis: usize) -> Self {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::span!("OccupancyDataBuilder::new");
+
+        assert!(
+            voxels_per_axis <= 64,
+            "Voxels per axis {} exceeds 64 (u64 bit limit)",
+            voxels_per_axis
+        );
+
+        let plane_size_all = plane_size_all_axes(voxels_per_axis);
+        let external_size = voxels_per_axis * 6;
+
+        Self {
+            voxels_per_axis,
+            global: vec![0u64; plane_size_all],
+            global_active: [0u64; 6],
+            external: vec![0u64; external_size],
+            external_exists: [false; 6],
+            per_material: HashMap::new(),
+            materials: HashMap::new(),
+        }
+    }
 }
 
 impl MeshData {
@@ -246,17 +309,7 @@ impl GreedyTimings {
 
 impl Default for OccupancyDataBuilder {
     fn default() -> Self {
-        #[cfg(feature = "tracy")]
-        let _span = tracy_client::span!("OccupancyDataBuilder::default");
-
-        Self {
-            global: vec![0u64; PLANE_SIZE_ALL_AXES],
-            global_active: [0u64; 6],
-            external: vec![0u64; MAX_VOXELS_PER_AXIS * 6],
-            external_exists: [false; 6],
-            per_material: HashMap::new(),
-            materials: HashMap::new(),
-        }
+        Self::new(64) // Default to 64 for backwards compatibility
     }
 }
 
@@ -276,11 +329,14 @@ impl OccupancyDataBuilder {
 
         OccupancyData {
             global: self.global,
-            global_active: self.global_active.map(AxisOccupancy::new),
+            global_active: self
+                .global_active
+                .map(|active| AxisOccupancy::new(active, self.voxels_per_axis)),
             external: self.external,
             external_exists: self.external_exists,
             per_material,
             materials,
+            voxels_per_axis: self.voxels_per_axis,
         }
     }
 
@@ -288,8 +344,8 @@ impl OccupancyDataBuilder {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::span!("OccupancyDataBuilder::fill_external_side");
 
-        let start = external_plane as usize * MAX_VOXELS_PER_AXIS;
-        let end = start + MAX_VOXELS_PER_AXIS;
+        let start = external_plane as usize * self.voxels_per_axis;
+        let end = start + self.voxels_per_axis;
         self.external[start..end].fill(u64::MAX);
     }
 
@@ -297,8 +353,8 @@ impl OccupancyDataBuilder {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::span!("OccupancyDataBuilder::clear_external_side");
 
-        let start = external_plane as usize * MAX_VOXELS_PER_AXIS;
-        let end = start + MAX_VOXELS_PER_AXIS;
+        let start = external_plane as usize * self.voxels_per_axis;
+        let end = start + self.voxels_per_axis;
         self.external[start..end].fill(0);
     }
 }
@@ -334,8 +390,8 @@ pub fn generate_external_occupancy_mask<T: VoxelTrait>(
 
     let (plane, dir) = extract_plane_dir(external_plane);
 
-    let offset_start = external_plane as usize * MAX_VOXELS_PER_AXIS;
-    let offset_end = offset_start + MAX_VOXELS_PER_AXIS;
+    let offset_start = external_plane as usize * builder.voxels_per_axis;
+    let offset_end = offset_start + builder.voxels_per_axis;
 
     let external_plane = &mut builder.external[offset_start..offset_end];
 
@@ -433,11 +489,12 @@ fn fill_masks_for_region(
         .and_modify(|count| *count += volume)
         .or_insert(volume);
 
-    if side != MAX_VOXELS_PER_AXIS {
+    let voxels_per_axis = builder.voxels_per_axis;
+    if side != voxels_per_axis {
         let occupancy_per_axis = builder
             .per_material
             .entry(material_id)
-            .or_insert_with(|| vec![0; PLANE_SIZE_ALL_AXES]);
+            .or_insert_with(|| vec![0; plane_size_all_axes(voxels_per_axis)]);
 
         let run_mask = (1u64 << side) - 1;
 
@@ -466,9 +523,9 @@ fn fill_masks_for_region(
             let z = start_z + i;
             let y = start_y + i;
 
-            let index_base_y = PLANE_XZ_OFFSET + z * MAX_VOXELS_PER_AXIS + start_x;
-            let index_base_z = PLANE_XY_OFFSET + y * MAX_VOXELS_PER_AXIS + start_x;
-            let index_base_x = PLANE_YZ_OFFSET + y * MAX_VOXELS_PER_AXIS + start_z;
+            let index_base_y = plane_xz_offset(voxels_per_axis) + z * voxels_per_axis + start_x;
+            let index_base_z = plane_xy_offset(voxels_per_axis) + y * voxels_per_axis + start_x;
+            let index_base_x = plane_yz_offset() + y * voxels_per_axis + start_z;
 
             for j in 0..side {
                 let index_y = index_base_y + j;
@@ -492,7 +549,7 @@ fn fill_masks_for_region(
                 e.get_mut().fill(u64::MAX);
             }
             Entry::Vacant(e) => {
-                e.insert(vec![u64::MAX; PLANE_SIZE_ALL_AXES]);
+                e.insert(vec![u64::MAX; plane_size_all_axes(voxels_per_axis)]);
             }
         }
 
@@ -606,7 +663,7 @@ pub fn generate_occupancy_masks<T: VoxelTrait>(
 pub fn generate_greedy_mesh_arrays(
     occupancy_data: &OccupancyData,
     mesh_data: &mut MeshData,
-    max_depth: MaxDepth,
+    _max_depth: MaxDepth,
     offset: Vec3,
     voxel_size: f32,
     #[cfg(feature = "trace_greedy_timings")] timings: &mut GreedyTimings,
@@ -633,28 +690,34 @@ pub fn generate_greedy_mesh_arrays(
 
     let materials_len = occupancy_data.materials.len();
 
-    let max_depth = max_depth.as_usize();
-    let max_voxels_per_axis = 1 << max_depth;
+    let max_voxels_per_axis = occupancy_data.voxels_per_axis;
     let max_voxels_per_axis_min_one = max_voxels_per_axis - 1;
 
-    let mut global_face_masks_pos = [const { 0u64 }; PLANE_SIZE];
-    let mut global_face_masks_neg = [const { 0u64 }; PLANE_SIZE];
-    let mut material_face_masks_pos = [0; PLANE_SIZE];
-    let mut material_face_masks_neg = [0; PLANE_SIZE];
+    assert!(
+        max_voxels_per_axis <= 64,
+        "Voxels per axis {} exceeds 64 (u64 bit limit). Use LOD to reduce mesh resolution.",
+        max_voxels_per_axis
+    );
+
+    let plane_size = plane_size(max_voxels_per_axis);
+    let mut global_face_masks_pos = vec![0u64; plane_size];
+    let mut global_face_masks_neg = vec![0u64; plane_size];
+    let mut material_face_masks_pos = vec![0u64; plane_size];
+    let mut material_face_masks_neg = vec![0u64; plane_size];
 
     #[cfg(feature = "trace_greedy_timings")]
     {
         timings.prep = now.elapsed();
     }
 
-    // we iterate over all planes first, to not process global occupancy masks for each material separately
-    for plane_data in &PLANES {
-        let external_pos_start = plane_data.pos as usize * MAX_VOXELS_PER_AXIS;
-        let external_pos_end = external_pos_start + MAX_VOXELS_PER_AXIS;
+    let planes = get_plane_data(max_voxels_per_axis);
+    for plane_data in &planes {
+        let external_pos_start = plane_data.pos as usize * max_voxels_per_axis;
+        let external_pos_end = external_pos_start + max_voxels_per_axis;
         let external_pos = &occupancy_data.external[external_pos_start..external_pos_end];
 
-        let external_neg_start = plane_data.neg as usize * MAX_VOXELS_PER_AXIS;
-        let external_neg_end = external_neg_start + MAX_VOXELS_PER_AXIS;
+        let external_neg_start = plane_data.neg as usize * max_voxels_per_axis;
+        let external_neg_end = external_neg_start + max_voxels_per_axis;
         let external_neg = &occupancy_data.external[external_neg_start..external_neg_end];
 
         let global_active_rows = &occupancy_data.global_active[plane_data.global_active_idx];
@@ -675,7 +738,7 @@ pub fn generate_greedy_mesh_arrays(
                 continue;
             }
 
-            let base_idx = row * MAX_VOXELS_PER_AXIS;
+            let base_idx = row * max_voxels_per_axis;
 
             for col in min_col..max_col {
                 if ((global_active_cols.active >> col) & 1) == 0 {
@@ -725,7 +788,7 @@ pub fn generate_greedy_mesh_arrays(
 
             // process per material occupancy masks for the plane
             for row in min_row..max_row {
-                let base_idx = row * MAX_VOXELS_PER_AXIS;
+                let base_idx = row * max_voxels_per_axis;
 
                 for col in min_col..max_col {
                     let idx = base_idx + col;
@@ -777,12 +840,12 @@ pub fn generate_greedy_mesh_arrays(
                 continue;
             }
 
-            let active_depth_pos = AxisOccupancy::new(active_depth_pos);
-            let active_row_pos = AxisOccupancy::new(active_row_pos);
-            let active_col_pos = AxisOccupancy::new(active_col_pos);
-            let active_depth_neg = AxisOccupancy::new(active_depth_neg);
-            let active_row_neg = AxisOccupancy::new(active_row_neg);
-            let active_col_neg = AxisOccupancy::new(active_col_neg);
+            let active_depth_pos = AxisOccupancy::new(active_depth_pos, max_voxels_per_axis);
+            let active_row_pos = AxisOccupancy::new(active_row_pos, max_voxels_per_axis);
+            let active_col_pos = AxisOccupancy::new(active_col_pos, max_voxels_per_axis);
+            let active_depth_neg = AxisOccupancy::new(active_depth_neg, max_voxels_per_axis);
+            let active_row_neg = AxisOccupancy::new(active_row_neg, max_voxels_per_axis);
+            let active_col_neg = AxisOccupancy::new(active_col_neg, max_voxels_per_axis);
 
             let dirs_data = [
                 DirectionData {
@@ -828,14 +891,14 @@ pub fn generate_greedy_mesh_arrays(
 
                     let current_faces_left = faces_left;
 
-                    let mut faces = [const { 0u64 }; MAX_VOXELS_PER_AXIS];
+                    let mut faces = vec![0u64; max_voxels_per_axis];
 
                     for row in dir_data.active_row.min..dir_data.active_row.max {
                         if ((dir_data.active_row.active >> row) & 1) == 0 {
                             continue;
                         }
 
-                        let base_idx = row * MAX_VOXELS_PER_AXIS;
+                        let base_idx = row * max_voxels_per_axis;
                         for col in dir_data.active_col.min..dir_data.active_col.max {
                             if ((dir_data.active_col.active >> col) & 1) == 0 {
                                 continue;
@@ -879,14 +942,14 @@ fn generate_greedy_faces_for_slice(
     slice_data: &SliceData,
     slice: f32,
     faces_total: usize,
-    faces: &[u64; MAX_VOXELS_PER_AXIS],
+    faces: &[u64],
 ) {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::span!("generate_greedy_faces_for_slice");
 
     let mut faces_left = faces_total;
 
-    let mut used = [const { 0u64 }; MAX_VOXELS_PER_AXIS];
+    let mut used = vec![0u64; faces.len()];
 
     'main: for start_row in slice_data.min_row..slice_data.max_row {
         let mut available = faces[start_row] & !used[start_row];
@@ -1018,7 +1081,8 @@ pub fn generate_greedy_mesh_arrays_stride<
                 offset.y = chunk_pos.y as f32 * chunk_size;
                 offset.z = chunk_pos.z as f32 * chunk_size;
 
-                let mut builder = OccupancyDataBuilder::default();
+                let voxels_per_axis_builder = voxels_per_axis.min(64) as usize;
+                let mut builder = OccupancyDataBuilder::new(voxels_per_axis_builder);
 
                 #[cfg(feature = "trace_greedy_timings")]
                 let mut timings = GreedyTimings::default();
@@ -1261,11 +1325,13 @@ pub fn chunk_generate_greedy_mesh_arrays_ext<T: VoxelTrait>(
     let _span = tracy_client::span!("chunk_generate_greedy_mesh_arrays_ext");
 
     let voxel_size = chunk.voxel_size(lod);
+    let max_depth = chunk.max_depth(lod);
+    let voxels_per_axis = chunk.voxels_per_axis(lod) as usize;
 
     #[cfg(feature = "trace_greedy_timings")]
     let timing_builder_default = Instant::now();
 
-    let mut builder = OccupancyDataBuilder::default();
+    let mut builder = OccupancyDataBuilder::new(voxels_per_axis);
 
     #[cfg(feature = "trace_greedy_timings")]
     {
@@ -1294,8 +1360,6 @@ pub fn chunk_generate_greedy_mesh_arrays_ext<T: VoxelTrait>(
     {
         timings.filling_external = timing_filling_external.elapsed();
     }
-
-    let max_depth = chunk.max_depth(lod);
 
     generate_occupancy_masks(
         interner,

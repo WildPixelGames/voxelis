@@ -13,96 +13,52 @@ use super::{
     VoxOpsBatch, VoxOpsBulkWrite, VoxOpsConfig, VoxOpsDirty, VoxOpsRead, VoxOpsState, VoxOpsWrite,
 };
 
-/// Lookup table for fast sibling scanning in octree traversal using Morton-encoded paths.
+/// Generates path mask for fast sibling scanning in octree traversal using Morton-encoded paths.
 ///
-/// `PATH_MASKS[max_depth][level]` provides a bitmask indicating which sibling nodes
-/// (at a given tree level) are affected by a batch operation or traversal, based on the
-/// Morton encoding of the path. Each mask allows to quickly select all siblings up to
-/// a given position, enabling efficient batch updates and queries.
+/// The path mask provides a bitmask indicating which sibling nodes (at a given tree level)
+/// are affected by a batch operation or traversal, based on the Morton encoding of the path.
 ///
-/// - The outer array index (`max_depth`) corresponds to the maximum octree depth.
-/// - The inner array index (`level`) corresponds to the current level within the octree (0-based).
-/// - Each mask is a bitfield where set bits indicate affected siblings at that level.
+/// # Parameters
 ///
-/// # Usage
+/// * `max_depth` - The maximum octree depth (1-21 supported with u64 Morton encoding)
+/// * `level` - The current level within the octree (0-based, must be < max_depth)
 ///
-/// Used internally in SVO DAG batch algorithms for fast propagation of changes
-/// across sibling nodes, leveraging the spatial locality of Morton codes.
+/// # Returns
+///
+/// A u64 bitmask where set bits indicate affected siblings at that level.
 ///
 /// # Morton Encoding
 ///
-/// Morton codes (Z-order curve) interleave the bits of the 3D coordinates,
-/// enabling efficient spatial indexing and traversal in octrees.
+/// Morton codes (Z-order curve) interleave the bits of the 3D coordinates (3 bits per level),
+/// enabling efficient spatial indexing and traversal in octrees. With u64, we support up to
+/// 21 levels of depth (63 bits / 3 = 21).
 ///
 /// # See also
 ///
 /// - [`encode_child_index_path`]
 /// - SVO DAG batch update logic
-const PATH_MASKS: [[u32; MAX_ALLOWED_DEPTH - 1]; MAX_ALLOWED_DEPTH] = [
-    // max_depth == 0
-    [
-        0b00_000_000_000_000_000_000_000_000_000_000, // 0
-        0b00_000_000_000_000_000_000_000_000_000_000, // 1
-        0b00_000_000_000_000_000_000_000_000_000_000, // 2
-        0b00_000_000_000_000_000_000_000_000_000_000, // 3
-        0b00_000_000_000_000_000_000_000_000_000_000, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 1
-    [
-        0b00_000_000_000_000_000_000_000_000_000_111, // 0
-        0b00_000_000_000_000_000_000_000_000_000_000, // 1
-        0b00_000_000_000_000_000_000_000_000_000_000, // 2
-        0b00_000_000_000_000_000_000_000_000_000_000, // 3
-        0b00_000_000_000_000_000_000_000_000_000_000, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 2
-    [
-        0b00_000_000_000_000_000_000_000_000_111_000, // 0
-        0b00_000_000_000_000_000_000_000_000_111_111, // 1
-        0b00_000_000_000_000_000_000_000_000_000_000, // 2
-        0b00_000_000_000_000_000_000_000_000_000_000, // 3
-        0b00_000_000_000_000_000_000_000_000_000_000, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 3
-    [
-        0b00_000_000_000_000_000_000_000_111_000_000, // 0
-        0b00_000_000_000_000_000_000_000_111_111_000, // 1
-        0b00_000_000_000_000_000_000_000_111_111_111, // 2
-        0b00_000_000_000_000_000_000_000_000_000_000, // 3
-        0b00_000_000_000_000_000_000_000_000_000_000, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 4
-    [
-        0b00_000_000_000_000_000_000_111_000_000_000, // 0
-        0b00_000_000_000_000_000_000_111_111_000_000, // 1
-        0b00_000_000_000_000_000_000_111_111_111_000, // 2
-        0b00_000_000_000_000_000_000_111_111_111_111, // 3
-        0b00_000_000_000_000_000_000_000_000_000_000, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 5
-    [
-        0b00_000_000_000_000_000_111_000_000_000_000, // 0
-        0b00_000_000_000_000_000_111_111_000_000_000, // 1
-        0b00_000_000_000_000_000_111_111_111_000_000, // 2
-        0b00_000_000_000_000_000_111_111_111_111_000, // 3
-        0b00_000_000_000_000_000_111_111_111_111_111, // 4
-        0b00_000_000_000_000_000_000_000_000_000_000, // 5
-    ],
-    // max_depth == 6
-    [
-        0b00_000_000_000_000_111_000_000_000_000_000, // 0
-        0b00_000_000_000_000_111_111_000_000_000_000, // 1
-        0b00_000_000_000_000_111_111_111_000_000_000, // 2
-        0b00_000_000_000_000_111_111_111_111_000_000, // 3
-        0b00_000_000_000_000_111_111_111_111_111_000, // 4
-        0b00_000_000_000_000_111_111_111_111_111_111, // 5
-    ],
-];
+#[inline(always)]
+pub const fn generate_path_mask(max_depth: usize, level: usize) -> u64 {
+    if max_depth == 0 || level >= max_depth {
+        return 0;
+    }
+
+    // Number of 3-bit groups to include (cumulative from top level)
+    let num_groups = level + 1;
+    // Starting bit position from LSB (right side)
+    let start_pos = (max_depth - num_groups) * 3;
+    // Total number of bits to set
+    let num_bits = num_groups * 3;
+
+    // Create mask: (2^num_bits - 1) << start_pos
+    // Note: For num_bits >= 64, this would overflow, but max is 21*3=63 bits
+    if num_bits >= 64 {
+        return u64::MAX;
+    }
+
+    let mask = ((1u64 << num_bits) - 1) << start_pos;
+    mask
+}
 
 /// VoxTree - a high performance, SVO DAG (Sparse Voxel Octree Directed Acyclic Graph) structure.
 pub struct VoxTree<T: VoxelTrait> {
@@ -925,7 +881,7 @@ fn set_batch_at_depth_iterative<T: VoxelTrait>(
             0
         };
 
-        let path_mask = PATH_MASKS[max_depth][path_mask_depth] as usize;
+        let path_mask = generate_path_mask(max_depth, path_mask_depth) as usize;
 
         let mut equivalent_id = initial_node_id;
         let mut leaf_id = BlockId::EMPTY;

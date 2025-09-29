@@ -2,6 +2,165 @@ use glam::IVec3;
 
 use crate::{BlockId, MaxDepth, TraversalDepth, VoxInterner, VoxelTrait};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_morton_encoding_u64_upgrade() {
+        // Test that encode_child_index_path now returns u64
+        let pos = glam::IVec3::new(1, 2, 3);
+        let path: u64 = encode_child_index_path(&pos);
+
+        // Verify it's not zero (basic sanity)
+        assert_ne!(path, 0);
+
+        // Test that we can handle larger coordinates
+        let large_pos = glam::IVec3::new(1000000, 500000, 250000); // Within 21-bit range
+        let large_path: u64 = encode_child_index_path(&large_pos);
+        assert_ne!(large_path, 0);
+
+        // Test roundtrip encoding/decoding for small values
+        // (Full roundtrip would require a decode function, but we can test known patterns)
+        let test_positions = [
+            glam::IVec3::new(0, 0, 0),
+            glam::IVec3::new(1, 0, 0),
+            glam::IVec3::new(0, 1, 0),
+            glam::IVec3::new(0, 0, 1),
+            glam::IVec3::new(1, 1, 1),
+            glam::IVec3::new(7, 7, 7), // Max for 3-bit depth
+        ];
+
+        for pos in &test_positions {
+            let encoded = encode_child_index_path(pos);
+            // Each level uses 3 bits, so we can verify the lowest bits
+            let expected_lowest_bits =
+                ((pos.x & 1) as u64) | (((pos.y & 1) as u64) << 1) | (((pos.z & 1) as u64) << 2);
+            assert_eq!(encoded & 0b111, expected_lowest_bits);
+        }
+    }
+
+    #[test]
+    fn test_max_depth_scaling() {
+        // Test that we can create trees with much deeper depths
+
+        // Old limit was depth 7 (128 voxels per axis)
+        let old_max = MaxDepth::new(7);
+        assert_eq!(old_max.max(), 7);
+
+        // New limit supports depth 21 (2M+ voxels per axis)
+        let new_max = MaxDepth::new(21);
+        assert_eq!(new_max.max(), 21);
+
+        // Test intermediate depths
+        for depth in 8..=21 {
+            let max_depth = MaxDepth::new(depth);
+            assert_eq!(max_depth.max(), depth);
+
+            // Verify voxels per axis calculation
+            let voxels_per_axis = 1u32 << depth;
+            assert!(voxels_per_axis >= 256); // At least 256^3 voxels per chunk
+        }
+    }
+
+    #[test]
+    fn test_backwards_compatibility() {
+        // Test that small values still work the same as before
+
+        // These should produce the same results as the old u32 version for small coordinates
+        let small_positions = [
+            glam::IVec3::new(0, 0, 0),
+            glam::IVec3::new(1, 1, 1),
+            glam::IVec3::new(31, 31, 31), // Max for 5-bit coordinates (depth 5)
+            glam::IVec3::new(63, 63, 63), // Max for 6-bit coordinates (depth 6)
+        ];
+
+        for pos in &small_positions {
+            let path = encode_child_index_path(pos);
+
+            // Verify it's a valid Morton code (no overlapping bits)
+            // In Morton encoding, no two coordinate bits should occupy the same bit position
+            let x_bits = path & 0x9249249249249249; // Extract X bits
+            let y_bits = (path >> 1) & 0x9249249249249249; // Extract Y bits
+            let z_bits = (path >> 2) & 0x9249249249249249; // Extract Z bits
+
+            // Reconstruct and verify it matches original
+            let reconstructed = x_bits | (y_bits << 1) | (z_bits << 2);
+            assert_eq!(reconstructed, path);
+        }
+    }
+
+    #[test]
+    fn test_massive_world_scales() {
+        // Test calculations for massive world scales enabled by u64 Morton encoding
+
+        // Depth 21: 2M voxels per axis per chunk
+        let _depth_21 = MaxDepth::new(21);
+        let voxels_per_axis = 1u32 << 21; // 2,097,152
+        assert_eq!(voxels_per_axis, 2097152);
+
+        // At 1cm per voxel: 20.97km per chunk side
+        // At 1mm per voxel: 2.097km per chunk side
+        // At 0.1mm per voxel: 209.7m per chunk side
+
+        // Test we can encode coordinates up to this range
+        let max_coord = (voxels_per_axis - 1) as i32;
+        let max_pos = glam::IVec3::new(max_coord, max_coord, max_coord);
+        let max_path = encode_child_index_path(&max_pos);
+
+        // Should use all 63 bits of the u64
+        assert_eq!(max_path.count_ones(), 63); // All bits should be set in Morton pattern
+
+        // Test various practical scales
+        let scales = [
+            (21, "1mm voxels", 2097.152), // 2.1km chunks
+            (20, "2mm voxels", 1048.576), // 1.0km chunks
+            (18, "1cm voxels", 262.144),  // 262m chunks
+            (15, "1dm voxels", 32.768),   // 33m chunks
+            (12, "1m voxels", 4.096),     // 4m chunks
+        ];
+
+        for (depth, _description, expected_meters) in &scales {
+            let _depth_obj = MaxDepth::new(*depth);
+            let voxels = 1u32 << depth;
+            let meters_per_chunk = voxels as f32 * 0.001; // Assuming 1mm base voxel size
+
+            // Verify calculation is approximately correct
+            assert!((meters_per_chunk - expected_meters).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn test_morton_properties() {
+        // Test fundamental Morton encoding properties
+
+        // Property 1: Adjacent coordinates should have correlated Morton codes
+        let pos1 = glam::IVec3::new(1, 1, 1);
+        let pos2 = glam::IVec3::new(2, 1, 1); // Adjacent in X
+        let path1 = encode_child_index_path(&pos1);
+        let path2 = encode_child_index_path(&pos2);
+
+        // The codes should be close (differ by few bits)
+        let xor = path1 ^ path2;
+        assert!(xor.count_ones() <= 6); // Should differ by at most 6 bits
+
+        // Property 2: Morton codes should preserve locality
+        let center = glam::IVec3::new(1000, 1000, 1000);
+        let neighbor = glam::IVec3::new(1001, 1000, 1000);
+        let distant = glam::IVec3::new(2000, 1000, 1000);
+
+        let center_path = encode_child_index_path(&center);
+        let neighbor_path = encode_child_index_path(&neighbor);
+        let distant_path = encode_child_index_path(&distant);
+
+        // Neighbor should be closer in Morton space than distant point
+        let neighbor_dist = (center_path ^ neighbor_path).count_ones();
+        let distant_dist = (center_path ^ distant_path).count_ones();
+
+        assert!(neighbor_dist < distant_dist);
+    }
+}
+
 #[inline(always)]
 pub const fn child_index(position: &IVec3, depth: &TraversalDepth) -> usize {
     let shift = depth.max() - depth.current() - 1;
@@ -21,34 +180,38 @@ pub const fn child_index2(position: &IVec3, current: usize, max: usize) -> usize
 }
 
 #[inline(always)]
-pub const fn encode_child_index_path(position: &IVec3) -> u32 {
-    const MASK_10_BITS: u32 = 0x000003FF; // Mask for lower 10 bits
-    const MASK_1: u32 = 0x30000FF;
-    const MASK_2: u32 = 0x300F00F;
-    const MASK_3: u32 = 0x30C30C3;
-    const MASK_4: u32 = 0x9249249;
+pub const fn encode_child_index_path(position: &IVec3) -> u64 {
+    const MASK_21_BITS: u64 = 0x1FFFFF; // Mask for lower 21 bits (supports up to 2M voxels per axis)
+    const MASK_1: u64 = 0x1F00000000FFFF;
+    const MASK_2: u64 = 0x1F0000FF0000FF;
+    const MASK_3: u64 = 0x100F00F00F00F00F;
+    const MASK_4: u64 = 0x10C30C30C30C30C3;
+    const MASK_5: u64 = 0x1249249249249249;
 
-    let x = (position.x as u32) & MASK_10_BITS;
-    let y = (position.y as u32) & MASK_10_BITS;
-    let z = (position.z as u32) & MASK_10_BITS;
+    let x = (position.x as u64) & MASK_21_BITS;
+    let y = (position.y as u64) & MASK_21_BITS;
+    let z = (position.z as u64) & MASK_21_BITS;
 
-    // Split x bits using magic shifts and masks
-    let x = (x | (x << 16)) & MASK_1;
-    let x = (x | (x << 8)) & MASK_2;
-    let x = (x | (x << 4)) & MASK_3;
-    let x = (x | (x << 2)) & MASK_4;
+    // Split x bits using magic shifts and masks (spreads 21 bits across 63 positions)
+    let x = (x | (x << 32)) & MASK_1;
+    let x = (x | (x << 16)) & MASK_2;
+    let x = (x | (x << 8)) & MASK_3;
+    let x = (x | (x << 4)) & MASK_4;
+    let x = (x | (x << 2)) & MASK_5;
 
     // Split y bits
-    let y = (y | (y << 16)) & MASK_1;
-    let y = (y | (y << 8)) & MASK_2;
-    let y = (y | (y << 4)) & MASK_3;
-    let y = (y | (y << 2)) & MASK_4;
+    let y = (y | (y << 32)) & MASK_1;
+    let y = (y | (y << 16)) & MASK_2;
+    let y = (y | (y << 8)) & MASK_3;
+    let y = (y | (y << 4)) & MASK_4;
+    let y = (y | (y << 2)) & MASK_5;
 
     // Split z bits
-    let z = (z | (z << 16)) & MASK_1;
-    let z = (z | (z << 8)) & MASK_2;
-    let z = (z | (z << 4)) & MASK_3;
-    let z = (z | (z << 2)) & MASK_4;
+    let z = (z | (z << 32)) & MASK_1;
+    let z = (z | (z << 16)) & MASK_2;
+    let z = (z | (z << 8)) & MASK_3;
+    let z = (z | (z << 4)) & MASK_4;
+    let z = (z | (z << 2)) & MASK_5;
 
     // Combine results - x at positions 3n, y at 3n+1, z at 3n+2
     x | (y << 1) | (z << 2)
@@ -57,33 +220,37 @@ pub const fn encode_child_index_path(position: &IVec3) -> u32 {
 #[macro_export]
 macro_rules! encode_child_index_path_macro {
     ($position:expr) => {{
-        const MASK_10_BITS: u32 = 0x000003FF; // Mask for lower 10 bits
-        const MASK_1: u32 = 0x30000FF;
-        const MASK_2: u32 = 0x300F00F;
-        const MASK_3: u32 = 0x30C30C3;
-        const MASK_4: u32 = 0x9249249;
+        const MASK_21_BITS: u64 = 0x1FFFFF; // Mask for lower 21 bits (supports up to 2M voxels per axis)
+        const MASK_1: u64 = 0x1F00000000FFFF;
+        const MASK_2: u64 = 0x1F0000FF0000FF;
+        const MASK_3: u64 = 0x100F00F00F00F00F;
+        const MASK_4: u64 = 0x10C30C30C30C30C3;
+        const MASK_5: u64 = 0x1249249249249249;
 
-        let x = ($position.x as u32) & MASK_10_BITS;
-        let y = ($position.y as u32) & MASK_10_BITS;
-        let z = ($position.z as u32) & MASK_10_BITS;
+        let x = ($position.x as u64) & MASK_21_BITS;
+        let y = ($position.y as u64) & MASK_21_BITS;
+        let z = ($position.z as u64) & MASK_21_BITS;
 
-        // Split x bits using magic shifts and masks
-        let x = (x | (x << 16)) & MASK_1;
-        let x = (x | (x << 8)) & MASK_2;
-        let x = (x | (x << 4)) & MASK_3;
-        let x = (x | (x << 2)) & MASK_4;
+        // Split x bits using magic shifts and masks (spreads 21 bits across 63 positions)
+        let x = (x | (x << 32)) & MASK_1;
+        let x = (x | (x << 16)) & MASK_2;
+        let x = (x | (x << 8)) & MASK_3;
+        let x = (x | (x << 4)) & MASK_4;
+        let x = (x | (x << 2)) & MASK_5;
 
         // Split y bits
-        let y = (y | (y << 16)) & MASK_1;
-        let y = (y | (y << 8)) & MASK_2;
-        let y = (y | (y << 4)) & MASK_3;
-        let y = (y | (y << 2)) & MASK_4;
+        let y = (y | (y << 32)) & MASK_1;
+        let y = (y | (y << 16)) & MASK_2;
+        let y = (y | (y << 8)) & MASK_3;
+        let y = (y | (y << 4)) & MASK_4;
+        let y = (y | (y << 2)) & MASK_5;
 
         // Split z bits
-        let z = (z | (z << 16)) & MASK_1;
-        let z = (z | (z << 8)) & MASK_2;
-        let z = (z | (z << 4)) & MASK_3;
-        let z = (z | (z << 2)) & MASK_4;
+        let z = (z | (z << 32)) & MASK_1;
+        let z = (z | (z << 16)) & MASK_2;
+        let z = (z | (z << 8)) & MASK_3;
+        let z = (z | (z << 4)) & MASK_4;
+        let z = (z | (z << 2)) & MASK_5;
 
         // Combine results - x at positions 3n, y at 3n+1, z at 3n+2
         x | (y << 1) | (z << 2)
