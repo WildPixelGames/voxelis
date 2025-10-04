@@ -173,80 +173,117 @@ fn build_face_mask_simd(
     slice_axis: usize,
     is_positive: bool,
 ) {
+    use std::simd::u8x32;
+
     let vpa = occupancy.voxels_per_axis;
+    let lane_count = u8x32::LEN; // 32
 
     // Determine coordinate mapping based on slice axis
     for v in 0..vpa {
-        for u in 0..vpa {
-            let (x, y, z) = match slice_axis {
-                0 => (slice, v, u), // X slice - v and u swapped to match quad generation
-                1 => (u, slice, v), // Y slice
-                _ => (u, v, slice), // Z slice
+        let mut u = 0;
+        while u < vpa {
+            let end_u = (u + lane_count).min(vpa);
+            let current_u = u8x32::splat(u as u8);
+            let incr = u8x32::from_array([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ]);
+            let u_vec = current_u + incr;
+
+            // Get positions
+            let (x_vec, y_vec, z_vec) = match slice_axis {
+                0 => (u8x32::splat(slice as u8), u8x32::splat(v as u8), u_vec), // X slice
+                1 => (u_vec, u8x32::splat(slice as u8), u8x32::splat(v as u8)), // Y slice
+                _ => (u_vec, u8x32::splat(v as u8), u8x32::splat(slice as u8)), // Z slice
             };
 
-            let current = occupancy.get(x, y, z);
-
-            if current == 0 {
-                continue; // Skip empty voxels
+            // Load current materials
+            let mut current_materials = u8x32::splat(0);
+            for i in 0..(end_u - u) {
+                let x = x_vec[i] as usize;
+                let y = y_vec[i] as usize;
+                let z = z_vec[i] as usize;
+                current_materials[i] = occupancy.get(x, y, z);
             }
 
-            // Check neighbor in the direction we're facing
-            let neighbor = if is_positive {
-                // Positive direction: check forward
-                match slice_axis {
-                    0 => {
-                        if x + 1 < vpa {
-                            occupancy.get(x + 1, y, z)
-                        } else {
-                            0 // Edge of volume = exposed
-                        }
-                    }
-                    1 => {
-                        if y + 1 < vpa {
-                            occupancy.get(x, y + 1, z)
-                        } else {
-                            0
-                        }
-                    }
-                    _ => {
-                        if z + 1 < vpa {
-                            occupancy.get(x, y, z + 1)
-                        } else {
-                            0
-                        }
-                    }
-                }
-            } else {
-                // Negative direction: check backward
-                match slice_axis {
-                    0 => {
-                        if x > 0 {
-                            occupancy.get(x - 1, y, z)
-                        } else {
-                            0
-                        }
-                    }
-                    1 => {
-                        if y > 0 {
-                            occupancy.get(x, y - 1, z)
-                        } else {
-                            0
-                        }
-                    }
-                    _ => {
-                        if z > 0 {
-                            occupancy.get(x, y, z - 1)
-                        } else {
-                            0
-                        }
-                    }
-                }
-            };
-
-            // Face is visible if neighbor is different (air or different material)
-            if neighbor != current {
-                face_mask[u + v * vpa] = current;
+            // Skip if all zero
+            if current_materials == u8x32::splat(0) {
+                u += lane_count;
+                continue;
             }
+
+            // Load neighbor materials
+            let mut neighbor_materials = u8x32::splat(0);
+            for i in 0..(end_u - u) {
+                let x = x_vec[i] as usize;
+                let y = y_vec[i] as usize;
+                let z = z_vec[i] as usize;
+                neighbor_materials[i] = if is_positive {
+                    match slice_axis {
+                        0 => {
+                            if x + 1 < vpa {
+                                occupancy.get(x + 1, y, z)
+                            } else {
+                                0
+                            }
+                        }
+                        1 => {
+                            if y + 1 < vpa {
+                                occupancy.get(x, y + 1, z)
+                            } else {
+                                0
+                            }
+                        }
+                        _ => {
+                            if z + 1 < vpa {
+                                occupancy.get(x, y, z + 1)
+                            } else {
+                                0
+                            }
+                        }
+                    }
+                } else {
+                    match slice_axis {
+                        0 => {
+                            if x > 0 {
+                                occupancy.get(x - 1, y, z)
+                            } else {
+                                0
+                            }
+                        }
+                        1 => {
+                            if y > 0 {
+                                occupancy.get(x, y - 1, z)
+                            } else {
+                                0
+                            }
+                        }
+                        _ => {
+                            if z > 0 {
+                                occupancy.get(x, y, z - 1)
+                            } else {
+                                0
+                            }
+                        }
+                    }
+                };
+            }
+
+            // Check if different
+            let diff_mask = current_materials.simd_ne(neighbor_materials);
+            let non_zero_mask = current_materials.simd_ne(u8x32::splat(0));
+            let mask = diff_mask & non_zero_mask;
+            let bitmask = mask.to_bitmask();
+
+            // Set face_mask
+            for i in 0..(end_u - u) {
+                if (bitmask & (1 << i)) != 0 {
+                    let idx = (u + i) + v * vpa;
+                    face_mask[idx] = current_materials[i];
+                }
+            }
+
+            u += lane_count;
         }
     }
 }
