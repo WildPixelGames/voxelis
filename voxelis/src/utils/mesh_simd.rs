@@ -6,8 +6,7 @@
 #![cfg(feature = "portable_simd")]
 
 use crate::{
-    BlockId, MaxDepth, TraversalDepth, VoxInterner, VoxelTrait,
-    utils::common::get_at_depth,
+    BlockId, MaxDepth, VoxInterner, VoxelTrait,
     utils::mesh::{CUBE_NORMALS, MeshData},
 };
 use glam::{IVec3, Vec3};
@@ -437,20 +436,78 @@ pub fn fill_occupancy_from_tree<T: VoxelTrait>(
     #[cfg(feature = "tracy")]
     let _span = tracy_client::span!("fill_occupancy_from_tree");
 
-    let vpa = occupancy.voxels_per_axis;
-    let depth = TraversalDepth::new(0, max_depth.max());
+    let md = max_depth.max() as usize;
+    fill_recursive(occupancy, interner, root_id, IVec3::ZERO, 0, md);
+}
 
-    // Traverse tree and fill occupancy
-    for z in 0..vpa {
-        for y in 0..vpa {
-            for x in 0..vpa {
-                let pos = IVec3::new(x as i32, y as i32, z as i32);
-                if let Some(voxel) = get_at_depth(interner, root_id, &pos, &depth) {
-                    let material_id = voxel.material_id().max(1) as MaterialId; // Ensure non-zero
-                    occupancy.set(x, y, z, material_id);
+fn fill_recursive<T: VoxelTrait>(
+    occupancy: &mut OccupancyDataSIMD,
+    interner: &VoxInterner<T>,
+    node_id: BlockId,
+    pos: IVec3,
+    depth: usize,
+    max_depth: usize,
+) {
+    if node_id.is_empty() {
+        return;
+    }
+
+    let subtree_size = 1 << (max_depth - depth);
+
+    if depth == max_depth {
+        // leaf, get value and fill the single voxel
+        let v = interner.get_value(&node_id);
+        if v.material_id() != 0 {
+            let material_id = v.material_id().max(1) as MaterialId;
+            occupancy.set(pos.x as usize, pos.y as usize, pos.z as usize, material_id);
+        }
+        return;
+    }
+
+    if node_id.is_branch() {
+        // recurse to children
+        let child_size = subtree_size / 2;
+        for child_idx in 0..8 {
+            let offset = child_offset(child_idx) * child_size;
+            let child_pos = pos + offset;
+            let child_id = interner.get_child_id(&node_id, child_idx);
+            fill_recursive(
+                occupancy,
+                interner,
+                child_id,
+                child_pos,
+                depth + 1,
+                max_depth,
+            );
+        }
+    } else {
+        // uniform leaf, fill the entire subtree
+        let v = interner.get_value(&node_id);
+        if v.material_id() != 0 {
+            let material_id = v.material_id().max(1) as MaterialId;
+            // fill the cube from pos to pos + subtree_size
+            for z in pos.z..pos.z + subtree_size {
+                for y in pos.y..pos.y + subtree_size {
+                    for x in pos.x..pos.x + subtree_size {
+                        occupancy.set(x as usize, y as usize, z as usize, material_id);
+                    }
                 }
             }
         }
+    }
+}
+
+fn child_offset(idx: usize) -> IVec3 {
+    match idx {
+        0 => IVec3::new(0, 0, 0),
+        1 => IVec3::new(1, 0, 0),
+        2 => IVec3::new(0, 1, 0),
+        3 => IVec3::new(1, 1, 0),
+        4 => IVec3::new(0, 0, 1),
+        5 => IVec3::new(1, 0, 1),
+        6 => IVec3::new(0, 1, 1),
+        7 => IVec3::new(1, 1, 1),
+        _ => unreachable!("Invalid child index"),
     }
 }
 

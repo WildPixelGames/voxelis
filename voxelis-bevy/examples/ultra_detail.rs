@@ -1,13 +1,13 @@
-//! Ultra Detail Example - Showcasing 256³+ Voxel Mesh Resolution with SIMD
+//! Ultra Detail Example - Showcasing 512³ Voxel Mesh Resolution with SIMD
 //!
 //! This example demonstrates the true power of Voxelis after the u64 Morton upgrade.
 //! Unlike the standard examples limited to 64³ mesh resolution, this uses the new
-//! SIMD-based mesher to render 256³ (16M voxels) or even 512³ (134M voxels) meshes.
+//! SIMD-based mesher to render 512³ (134M voxels) meshes.
 //!
 //! # Features
-//! - Massive voxel detail: 256³ to 512³ voxels per chunk
+//! - Massive voxel detail: 512³ voxels per chunk
 //! - SIMD-accelerated meshing: Fast greedy mesh generation
-//! - True centimeter accuracy: 1-2cm voxels over large areas
+//! - True centimeter accuracy: 1cm voxels over large areas
 //! - Adaptive LOD: Dynamically adjust detail based on camera distance
 //!
 //! # Controls
@@ -37,6 +37,7 @@ use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use bevy_screen_diagnostics::{
     ScreenDiagnosticsPlugin, ScreenEntityDiagnosticsPlugin, ScreenFrameDiagnosticsPlugin,
 };
+use std::time::Instant;
 use voxelis::{
     Lod, MaxDepth, VoxInterner,
     spatial::{VoxOpsBatch, VoxOpsChunkConfig, VoxOpsConfig, VoxOpsSpatial3D},
@@ -49,12 +50,12 @@ use voxelis::{
 };
 
 // ULTRA DETAIL SETTINGS
-const MAX_DEPTH: MaxDepth = MaxDepth::new(8); // 256³ voxels per chunk
-const VOXELS_PER_AXIS: usize = 1 << MAX_DEPTH.max(); // 256
-const CHUNK_SIZE: f32 = 5.12; // 5.12m chunk (2cm per voxel at full detail)
+const MAX_DEPTH: MaxDepth = MaxDepth::new(9); // 512³ voxels per chunk
+const VOXELS_PER_AXIS: usize = 1 << MAX_DEPTH.max(); // 512
+const CHUNK_SIZE: f32 = 5.12; // 5.12m chunk (1cm per voxel at full detail)
 const LOD_DISTANCE_STEP: f32 = 20.0; // Distance per LOD level
-const MIN_LOD: u8 = 0; // LOD 0 = FULL 256³ mesh resolution!
-const MAX_LOD: u8 = 6; // LOD 6 = 4³ minimum
+const MIN_LOD: u8 = 0; // LOD 0 = FULL 512³ mesh resolution!
+const MAX_LOD: u8 = 7; // LOD 7 = 4³ minimum
 const INITIAL_LOD: u8 = 0; // Start at maximum detail
 
 #[derive(Resource, Default)]
@@ -83,8 +84,8 @@ impl World {
         let mut batch = chunk.create_batch();
 
         // Create a large, detailed sphere
-        let center = IVec3::new(128, 128, 128); // Center of 256³ space
-        let radius = 100; // Large radius to show detail
+        let center = IVec3::new(256, 256, 256); // Center of 512³ space
+        let radius = 200; // Large radius to show detail
         let value = 1;
 
         generate_sphere_batch(&mut batch, center, radius, value);
@@ -96,7 +97,7 @@ impl World {
         println!("  Total voxels in chunk: {}", VOXELS_PER_AXIS.pow(3));
         println!("  Chunk size: {}m", CHUNK_SIZE);
         println!(
-            "  Voxel size (LOD 0): {}cm",
+            "  Voxel size (LOD 0): {:.1}cm",
             (CHUNK_SIZE / VOXELS_PER_AXIS as f32) * 100.0
         );
         println!("  Sphere radius: {} voxels", radius);
@@ -145,13 +146,21 @@ impl World {
             voxels_per_axis
         );
 
+        let start_total = Instant::now();
+
         // Fill occupancy data from tree
         let mut occupancy = OccupancyDataSIMD::new(voxels_per_axis);
+        let start_fill = Instant::now();
         fill_occupancy_from_tree(
             &mut occupancy,
             &self.interner,
             self.chunk.get_root_id(),
             max_depth,
+        );
+        let fill_duration = start_fill.elapsed();
+        println!(
+            "  Occupancy fill time: {:.2}ms",
+            fill_duration.as_secs_f64() * 1000.0
         );
 
         // Generate mesh using SIMD
@@ -159,12 +168,24 @@ impl World {
         let voxel_size = self.chunk.voxel_size(lod);
         let offset = self.chunk.world_position_3d();
 
+        let start_mesh = Instant::now();
         generate_greedy_mesh_simd(&occupancy, &mut mesh_data, offset, voxel_size);
+        let mesh_duration = start_mesh.elapsed();
+        println!(
+            "  SIMD mesh generation time: {:.2}ms",
+            mesh_duration.as_secs_f64() * 1000.0
+        );
 
         println!(
             "  Generated {} vertices, {} triangles",
             mesh_data.vertices.len(),
             mesh_data.indices.len() / 3
+        );
+
+        let total_duration = start_total.elapsed();
+        println!(
+            "  Total mesh generation time: {:.2}ms",
+            total_duration.as_secs_f64() * 1000.0
         );
 
         // Create Bevy mesh
@@ -249,6 +270,7 @@ fn setup_world(
 
 fn update_lod_system(
     camera_query: Query<&Transform, With<Camera3d>>,
+    mut commands: Commands,
     mut world: ResMut<World>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -264,10 +286,8 @@ fn update_lod_system(
     // Regenerate mesh if LOD changed
     if world.current_lod != old_lod {
         let new_mesh = world.generate_mesh(&mut meshes);
-        world.chunk_mesh = new_mesh;
-
-        // Note: Mesh handle update happens automatically via reactivity
-        // If it doesn't, we'd need to update the entity's mesh component
+        world.chunk_mesh = new_mesh.clone();
+        commands.entity(world.chunk_entity).insert(Mesh3d(new_mesh));
     }
 }
 
@@ -358,8 +378,8 @@ fn main() {
     println!("=======================================================");
     println!("  🚀 VOXELIS ULTRA DETAIL DEMO 🚀");
     println!("=======================================================");
-    println!("  Maximum mesh resolution: 256³ = 16,777,216 voxels");
-    println!("  Voxel size at LOD 0: 2cm");
+    println!("  Maximum mesh resolution: 512³ = 134,217,728 voxels");
+    println!("  Voxel size at LOD 0: 1cm");
     println!("  SIMD-accelerated greedy meshing");
     println!("  Press F1 to toggle stats window");
     println!("=======================================================\n");
@@ -368,7 +388,7 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Voxelis Ultra Detail - 256³ SIMD Meshing".to_string(),
+                    title: "Voxelis Ultra Detail - 512³ SIMD Meshing".to_string(),
                     present_mode: PresentMode::AutoVsync,
                     ..default()
                 }),
