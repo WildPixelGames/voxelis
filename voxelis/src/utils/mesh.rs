@@ -148,6 +148,7 @@ pub struct MeshData {
     pub vertices: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub indices: Vec<u32>,
+    pub materials: Vec<u32>,
 }
 
 #[cfg(feature = "trace_greedy_timings")]
@@ -711,6 +712,7 @@ pub fn generate_greedy_mesh_arrays(
 
         // generate greedy faces per material and direction of the plane
         for material_idx in 0..materials_len {
+            let material_id = occupancy_data.materials[material_idx].0;
             let occupancy_per_material = &occupancy_data.per_material[material_idx];
 
             let mut active_row_pos = 0;
@@ -857,6 +859,7 @@ pub fn generate_greedy_mesh_arrays(
                         slice as f32,
                         faces_total,
                         &faces,
+                        material_id,
                     );
 
                     if faces_left == 0 {
@@ -880,6 +883,7 @@ fn generate_greedy_faces_for_slice(
     slice: f32,
     faces_total: usize,
     faces: &[u64; MAX_VOXELS_PER_AXIS],
+    material_id: usize,
 ) {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::span!("generate_greedy_faces_for_slice");
@@ -944,7 +948,12 @@ fn generate_greedy_faces_for_slice(
             let v2 = CUBE_VERTS[v_ids[2]] * scale + offset + slice_data.global_offset;
             let v3 = CUBE_VERTS[v_ids[3]] * scale + offset + slice_data.global_offset;
 
-            add_quad(mesh_data, [v0, v1, v2, v3], &CUBE_NORMALS[normal_id]);
+            add_quad(
+                mesh_data,
+                [v0, v1, v2, v3],
+                &CUBE_NORMALS[normal_id],
+                material_id,
+            );
 
             used[start_row] |= width_mask;
             available &= !width_mask;
@@ -958,7 +967,7 @@ fn generate_greedy_faces_for_slice(
 }
 
 #[inline(always)]
-pub fn add_quad(mesh_data: &mut MeshData, quad: [Vec3; 4], normal: &Vec3) {
+pub fn add_quad(mesh_data: &mut MeshData, quad: [Vec3; 4], normal: &Vec3, material_id: usize) {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::span!("add_quad");
 
@@ -969,6 +978,7 @@ pub fn add_quad(mesh_data: &mut MeshData, quad: [Vec3; 4], normal: &Vec3) {
     mesh_data
         .indices
         .extend([index + 2, index + 1, index, index + 3, index, index + 1]);
+    mesh_data.materials.extend([material_id as u32; 4]);
 }
 
 #[inline(always)]
