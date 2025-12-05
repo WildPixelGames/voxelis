@@ -170,3 +170,33 @@ pub trait VoxOpsChunkWorldContainer<T: VoxelTrait> {
     /// Returns a mutable reference to the world chunk at the given position.
     fn world_chunk_mut(&mut self, position: IVec3) -> Option<&mut VoxChunk<T>>;
 }
+
+/// Ray intersection result structure containing relevant details about a detected collision.
+#[derive(Clone, Debug)]
+pub struct RayCastHit<T: VoxelTrait> {
+    // The non-empty voxel that was intersected.
+    pub value: T,
+
+    // The index of the voxel within the chunk, as for `VoxOpsRead` and `VoxOpsWrite`.
+    pub voxel_position: IVec3,
+
+    // World-space position of the voxel-ray intersection test.
+    pub world_position: Vec3,
+
+    // World-space normal at the point of intersection. The normal may not be set if the
+    // origin is within a voxel.
+    pub world_normal: Option<Vec3>,
+}
+
+/// Trait for ray intersection testing against a chunk.
+pub trait VoxOpsRayIntersection<T: VoxelTrait> {
+    /// Intersect a ray with this chunk at the given `lod`. The ray may originate outside the chunk.
+    /// The `origin` of the ray is in world space coordinates. The `direction` must be normalized.
+    fn ray_cast(
+        &self,
+        lod: Lod,
+        interner: &VoxInterner<T>,
+        origin: Vec3,
+        direction: Vec3,
+    ) -> Option<RayCastHit<T>>;
+}

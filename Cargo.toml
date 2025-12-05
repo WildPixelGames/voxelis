@@ -54,7 +54,7 @@ bitflags = "2.9"
 byteorder = "1.5"
 crossbeam = { version = "0.8" }
 fastnoise-lite = "1.1"
-glam = "0.29"
+glam = "0.30"
 humanize-bytes = "1.0"
 indicatif = { version = "0.18", features = ["improved_unicode"] }
 log = { version = "0.4", features = [

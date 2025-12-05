@@ -10,8 +10,8 @@ use rand::Rng;
 use voxelis::{
     Batch, Lod, MaxDepth, VoxInterner,
     spatial::{
-        VoxOpsBatch, VoxOpsBulkWrite, VoxOpsConfig, VoxOpsMesh, VoxOpsRead, VoxOpsState,
-        VoxOpsWrite, VoxTree,
+        VoxOpsBatch, VoxOpsBulkWrite, VoxOpsConfig, VoxOpsMesh, VoxOpsRayIntersection, VoxOpsRead,
+        VoxOpsState, VoxOpsWrite, VoxTree,
     },
     utils::{
         common::to_vec,
@@ -2287,6 +2287,61 @@ fn benchmark_voxtree(c: &mut Criterion) {
                 &interner,
                 &chunk,
             );
+        }
+
+        group.finish();
+    }
+
+    {
+        let mut group = c.benchmark_group("voxtree_cast_ray");
+
+        for &(size, depth) in depths.iter() {
+            let mut interner = VoxInterner::<i32>::with_memory_budget(1024 * 1024 * 1);
+            let mut batch = Batch::<i32>::new(depth);
+            let mut chunk = VoxChunk::with_position(1.28, depth, 0, 0, 0);
+            for i in 0..1i32 << depth.max() {
+                for j in 0..1i32 << depth.max() {
+                    batch.set(&mut interner, IVec3::new(i, j, 0), 1i32);
+                }
+            }
+            chunk.apply_batch(&mut interner, &batch);
+
+            for lod in 0..max_lod {
+                let lod = Lod::new(lod);
+                let bench_id =
+                    BenchmarkId::new(size.to_string(), format!("LOD_{lod}/cast_ray_hit"));
+                group.bench_with_input(bench_id, &depth, |b, _| {
+                    b.iter(|| {
+                        chunk
+                            .ray_cast(
+                                black_box(lod),
+                                &interner,
+                                black_box(Vec3::splat(0.52)),
+                                black_box(-Vec3::Z),
+                            )
+                            .unwrap();
+
+                        #[cfg(feature = "tracy")]
+                        tracy_client::frame_mark();
+                    });
+                });
+
+                let bench_id =
+                    BenchmarkId::new(size.to_string(), format!("LOD_{lod}/cast_ray_miss"));
+                group.bench_with_input(bench_id, &depth, |b, _| {
+                    b.iter(|| {
+                        chunk.ray_cast(
+                            black_box(lod),
+                            &interner,
+                            black_box(Vec3::splat(0.52)),
+                            black_box(Vec3::Z),
+                        );
+
+                        #[cfg(feature = "tracy")]
+                        tracy_client::frame_mark();
+                    });
+                });
+            }
         }
 
         group.finish();

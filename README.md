@@ -30,13 +30,14 @@
 
 ## ✨ Benchmarks: "Speed so fast, it hurts."
 
-| Operation                       | 32³ Voxels | Single Op   | Batch Op    | Notes |
-|----------------------------------|-------------|-------------|-------------|-------|
-| **fill()**                      | 32K         | **9 ns**    | **10.6 ns** | ⚡ Single leaf collapse |
-| **set_uniform()**               | 32K         | **5.17 ms** | **23.1 μs** | 🚀 ~224× faster |
-| **set_checkerboard()**          | 32K         | **2.52 ms** | **116.6 μs** | 🚀 ~22× faster |
-| **set_sum() (high-entropy)**     | 32K         | **5.92 ms** | **194.1 μs** | 🌪️ Complex pattern, ~30× faster |
-| **perlin dunes (high-entropy)**  | 32K         | -           | **~12 μs**  | 🌎 ~1380 chunks/frame (60 FPS) |
+| Operation                        | 32³ Voxels  | Single Op    | Batch Op     | Notes                           |
+|----------------------------------|-------------|--------------|--------------|---------------------------------|
+| **fill()**                       | 32K         | **9 ns**     | **10.6 ns**  | ⚡ Single leaf collapse         |
+| **set_uniform()**                | 32K         | **5.17 ms**  | **23.1 μs**  | 🚀 ~224× faster                 |
+| **set_checkerboard()**           | 32K         | **2.52 ms**  | **116.6 μs** | 🚀 ~22× faster                  |
+| **set_sum() (high-entropy)**     | 32K         | **5.92 ms**  | **194.1 μs** | 🌪️ Complex pattern, ~30× faster  |
+| **perlin dunes (high-entropy)**  | 32K         | -            | **~12 μs**   | 🌎 ~1380 chunks/frame (60 FPS)  |
+| **cast_ray()**                   | 32K         | **89.65 ns** | -            | (Ryzen9 7950 X3D)               |
 
 > Full raw results? Check [benches-raw.md](https://github.com/WildPixelGames/voxelis/blob/master/docs/benches-raw.md).
 >

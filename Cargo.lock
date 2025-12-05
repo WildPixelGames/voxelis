@@ -894,7 +894,7 @@ dependencies = [
  "approx",
  "bevy_reflect",
  "derive_more",
- "glam",
+ "glam 0.29.3",
  "itertools 0.14.0",
  "libm",
  "rand 0.8.5",
@@ -936,7 +936,7 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb60c753b968a2de0fd279b76a3d19517695e771edb4c23575c7f92156315de"
 dependencies = [
- "glam",
+ "glam 0.29.3",
 ]
 
 [[package]]
@@ -1048,7 +1048,7 @@ dependencies = [
  "downcast-rs 2.0.1",
  "erased-serde",
  "foldhash",
- "glam",
+ "glam 0.29.3",
  "petgraph",
  "serde",
  "smallvec",
@@ -2247,7 +2247,7 @@ checksum = "b0a05902cf601ed11d564128448097b98ebe3c6574bd7b6a653a3d56d54aa020"
 dependencies = [
  "const_panic",
  "encase_derive",
- "glam",
+ "glam 0.29.3",
  "thiserror 1.0.69",
 ]
 
@@ -2668,6 +2668,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.30.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd47b05dddf0005d850e5644cae7f2b14ac3df487979dbfff3b56f20b1a6ae46"
+
+[[package]]
 name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2857,7 +2863,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c9e718d32b6e6b2b32354e1b0367025efdd0b11d6a740b905ddf5db1074679"
 dependencies = [
  "constgebra",
- "glam",
+ "glam 0.29.3",
  "tinyvec",
 ]
 
@@ -5273,7 +5279,7 @@ dependencies = [
  "byteorder",
  "criterion2",
  "fastnoise-lite",
- "glam",
+ "glam 0.30.9",
  "md-5",
  "parking_lot",
  "rand 0.9.2",
@@ -5305,7 +5311,7 @@ dependencies = [
 name = "voxelis-math"
 version = "25.4.0"
 dependencies = [
- "glam",
+ "glam 0.30.9",
  "tracy-client",
 ]
 
@@ -5327,7 +5333,7 @@ name = "voxelis-voxelize"
 version = "25.4.0"
 dependencies = [
  "crossbeam",
- "glam",
+ "glam 0.30.9",
  "indicatif",
  "rayon",
  "rustc-hash 2.1.1",
