@@ -396,12 +396,13 @@ fn vec3_min_position(v: &Vec3) -> usize {
 }
 
 /// Minimal Ray vs AABB intersection testing.
+/// Returns the t_hit of an intersection, or None.
 fn ray_aabb_intersection(
     aabb_min: Vec3,
     aabb_max: Vec3,
     ray_origin: Vec3,
     ray_direction: Vec3,
-) -> Option<Vec3> {
+) -> Option<f32> {
     debug_assert!(aabb_min.x < aabb_max.x, "empty aabb on x");
     debug_assert!(aabb_min.y < aabb_max.y, "empty aabb on y");
     debug_assert!(aabb_min.z < aabb_max.z, "empty aabb on z");
@@ -428,11 +429,7 @@ fn ray_aabb_intersection(
     }
 
     // If we intersected a near before far, then we intersected the aabb.
-    if t_near < t_far {
-        Some(ray_origin + ray_direction * t_near)
-    } else {
-        None
-    }
+    if t_near < t_far { Some(t_near) } else { None }
 }
 
 impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
@@ -454,7 +451,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
         debug_assert!(direction.is_normalized(), "ray direction not normalized");
 
         // Fast-forward the ray into the chunk.
-        let Some(origin) = ray_aabb_intersection(
+        let Some(t_chunk_hit) = ray_aabb_intersection(
             self.world_position_3d(),
             self.world_position_3d() + self.world_size_3d(),
             origin,
@@ -463,6 +460,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
             // Ray does not intersect the chunk
             return None;
         };
+        let origin = origin + direction * t_chunk_hit;
 
         // Constant properties of the chunk at this LOD
         let voxels_per_side = self.data.voxels_per_axis(lod) as i32;
@@ -500,7 +498,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
         if let Some(value) = self.get(interner, voxel_pos) {
             return Some(RayCastHit {
                 value,
-                t_hit: 0.0,
+                t_hit: t_chunk_hit,
                 voxel_position: voxel_pos,
                 world_position: origin,
                 world_normal: None,
@@ -552,7 +550,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
                 world_normal[i] = -step_dir[i] as f32;
                 return Some(RayCastHit {
                     value,
-                    t_hit: curr_t,
+                    t_hit: curr_t + t_chunk_hit,
                     voxel_position: voxel_pos,
                     world_position: origin + curr_t * direction,
                     world_normal: Some(world_normal),
@@ -803,5 +801,29 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_voxel_intersection_t_is_world_relative() {
+        // Create two chunks extending on the Z axis.
+        let depth = MaxDepth::new(6);
+        let (chunk1, interner1) = create_test_chunk(depth, IVec3::new(0, 0, 1));
+        let (chunk2, interner2) = create_test_chunk(depth, IVec3::new(0, 0, 2));
+
+        // Create a ray extending pointing along the z axis that will pierce filled areas.
+        let origin = Vec3::new(3.2, 3.2, 0.0);
+        let direction = Vec3::Z;
+
+        let lod = Lod::new(0);
+        let hit1 = chunk1
+            .ray_cast(lod, &interner1, origin, direction)
+            .expect("ray missed chunk");
+        let hit2 = chunk2
+            .ray_cast(lod, &interner2, origin, direction)
+            .expect("ray missed chunk");
+
+        assert!(hit1.t_hit > 0.0);
+        assert!(hit2.t_hit > 0.0);
+        assert!(hit1.t_hit < hit2.t_hit);
     }
 }
