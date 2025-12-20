@@ -443,6 +443,9 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
         origin: Vec3,
         direction: Vec3,
     ) -> Option<RayCastHit<T>> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::span!("chunk_ray_cast");
+
         // This function implements "Amanatides, John & Woo, Andrew. (1987). A Fast Voxel Traversal
         // Algorithm for Ray Tracing. Proceedings of EuroGraphics. 87.", accounting for non-one
         // voxel sizes and utilizing a real vector type for clarity.
