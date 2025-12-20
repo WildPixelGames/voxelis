@@ -629,7 +629,7 @@ mod test {
     // Initialize one max-size chunk at origin, with 0.1 voxel size,
     // with all the voxels at z=0 set to 1.
     fn create_test_chunk(depth: MaxDepth, pos: IVec3) -> (VoxChunk<u8>, VoxInterner<u8>) {
-        let mut interner = VoxInterner::<u8>::with_memory_budget(1024 * 1024 * 1);
+        let mut interner = VoxInterner::<u8>::with_memory_budget(1024 * 1024);
         let mut batch = Batch::<u8>::new(depth);
         let mut chunk = VoxChunk::with_position(6.4, depth, pos.x, pos.y, pos.z);
         for i in 0..1i32 << depth.max() {
