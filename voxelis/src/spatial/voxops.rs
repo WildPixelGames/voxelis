@@ -177,6 +177,9 @@ pub struct RayCastHit<T: VoxelTrait> {
     // The non-empty voxel that was intersected.
     pub value: T,
 
+    // The t value of the hit, such that `world position` = `origin` + `dir` * `t_hit`.
+    pub t_hit: f32,
+
     // The index of the voxel within the chunk, as for `VoxOpsRead` and `VoxOpsWrite`.
     pub voxel_position: IVec3,
 

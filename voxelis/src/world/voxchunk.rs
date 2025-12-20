@@ -497,6 +497,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
         if let Some(value) = self.get(interner, voxel_pos) {
             return Some(RayCastHit {
                 value,
+                t_hit: 0.0,
                 voxel_position: voxel_pos,
                 world_position: origin,
                 world_normal: None,
@@ -504,7 +505,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
         }
 
         // Initialize our iteration variables. Renamed from Amanatides and Woo for clarity.
-        let mut curr_pos = origin;
+        let mut curr_t = 0.0;
         let step_sizes = voxel_size / direction.abs();
         let mut step_dir = IVec3::ONE;
         let mut next_dist = Vec3::MAX;
@@ -533,7 +534,7 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
 
             // Move to the next voxel in the ray direction
             voxel_pos[i] += step_dir[i];
-            curr_pos += direction * next_dist[i];
+            curr_t += next_dist[i];
             next_dist -= next_dist[i];
             next_dist[i] += step_sizes[i];
 
@@ -548,8 +549,9 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
                 world_normal[i] = -step_dir[i] as f32;
                 return Some(RayCastHit {
                     value,
+                    t_hit: curr_t,
                     voxel_position: voxel_pos,
-                    world_position: curr_pos,
+                    world_position: origin + curr_t * direction,
                     world_normal: Some(world_normal),
                 });
             }
