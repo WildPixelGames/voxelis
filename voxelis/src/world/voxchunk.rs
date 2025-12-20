@@ -379,6 +379,22 @@ impl<T: VoxelTrait> VoxOpsMesh<T> for VoxChunk<T> {
     }
 }
 
+/// Return the index of the x/y/z component with the minimum size. Copied
+/// from glam 0.30. Please replace with a call to Vec3::min_position once
+/// transitioned to glam 0.30 or higher.
+fn vec3_min_position(v: &Vec3) -> usize {
+    let mut min = v.x;
+    let mut index = 0;
+    if v.y < min {
+        min = v.y;
+        index = 1;
+    }
+    if v.z < min {
+        index = 2;
+    }
+    index
+}
+
 /// Minimal Ray vs AABB intersection testing.
 fn ray_aabb_intersection(
     aabb_min: Vec3,
@@ -511,7 +527,9 @@ impl<T: VoxelTrait> VoxOpsRayIntersection<T> for VoxChunk<T> {
 
         // Iterate through voxels to find the first that is filled
         loop {
-            let i = next_dist.min_position();
+            // Note: use Vec3::min_position, once it is available
+            // let i = next_dist.min_position();
+            let i = vec3_min_position(&next_dist);
 
             // Move to the next voxel in the ray direction
             voxel_pos[i] += step_dir[i];
