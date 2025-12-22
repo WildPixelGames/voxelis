@@ -200,35 +200,43 @@ impl<T: VoxelTrait> VoxOpsMesh<T> for VoxChunk<T> {
             let chunk_v6 = mesh::CUBE_VERTS[6] * chunk_size + offset;
             let chunk_v7 = mesh::CUBE_VERTS[7] * chunk_size + offset;
 
+            let material_id = interner.get_value(&self.data.get_root_id()).material_id();
+
             mesh::add_quad(
                 mesh_data,
                 [chunk_v0, chunk_v2, chunk_v3, chunk_v1],
                 &mesh::VEC_UP,
+                material_id,
             );
             mesh::add_quad(
                 mesh_data,
                 [chunk_v2, chunk_v5, chunk_v6, chunk_v1],
                 &mesh::VEC_RIGHT,
+                material_id,
             );
             mesh::add_quad(
                 mesh_data,
                 [chunk_v7, chunk_v5, chunk_v4, chunk_v6],
                 &mesh::VEC_DOWN,
+                material_id,
             );
             mesh::add_quad(
                 mesh_data,
                 [chunk_v0, chunk_v7, chunk_v4, chunk_v3],
                 &mesh::VEC_LEFT,
+                material_id,
             );
             mesh::add_quad(
                 mesh_data,
                 [chunk_v3, chunk_v6, chunk_v7, chunk_v2],
                 &mesh::VEC_BACK,
+                material_id,
             );
             mesh::add_quad(
                 mesh_data,
                 [chunk_v1, chunk_v4, chunk_v5, chunk_v0],
                 &mesh::VEC_FORWARD,
+                material_id,
             );
 
             return;
@@ -282,6 +290,7 @@ impl<T: VoxelTrait> VoxOpsMesh<T> for VoxChunk<T> {
                     if unsafe { *data.get_unchecked(index) } == T::default() {
                         continue;
                     }
+                    let material_id = unsafe { data.get_unchecked(index) }.material_id();
 
                     let has_top = y + 1 >= voxels_per_axis
                         || unsafe { *data.get_unchecked(index + shift_y) } == T::default();
@@ -313,22 +322,27 @@ impl<T: VoxelTrait> VoxOpsMesh<T> for VoxChunk<T> {
                     let v7 = Vec3::new(v_x_array[7], v_y_array[7], v_z_array[7]);
 
                     if has_top {
-                        mesh::add_quad(mesh_data, [v0, v2, v3, v1], &mesh::VEC_UP);
+                        mesh::add_quad(mesh_data, [v0, v2, v3, v1], &mesh::VEC_UP, material_id);
                     }
                     if has_right {
-                        mesh::add_quad(mesh_data, [v2, v5, v6, v1], &mesh::VEC_RIGHT);
+                        mesh::add_quad(mesh_data, [v2, v5, v6, v1], &mesh::VEC_RIGHT, material_id);
                     }
                     if has_bottom {
-                        mesh::add_quad(mesh_data, [v7, v5, v4, v6], &mesh::VEC_DOWN);
+                        mesh::add_quad(mesh_data, [v7, v5, v4, v6], &mesh::VEC_DOWN, material_id);
                     }
                     if has_left {
-                        mesh::add_quad(mesh_data, [v0, v7, v4, v3], &mesh::VEC_LEFT);
+                        mesh::add_quad(mesh_data, [v0, v7, v4, v3], &mesh::VEC_LEFT, material_id);
                     }
                     if has_front {
-                        mesh::add_quad(mesh_data, [v3, v6, v7, v2], &mesh::VEC_BACK);
+                        mesh::add_quad(mesh_data, [v3, v6, v7, v2], &mesh::VEC_BACK, material_id);
                     }
                     if has_back {
-                        mesh::add_quad(mesh_data, [v1, v4, v5, v0], &mesh::VEC_FORWARD);
+                        mesh::add_quad(
+                            mesh_data,
+                            [v1, v4, v5, v0],
+                            &mesh::VEC_FORWARD,
+                            material_id,
+                        );
                     }
                 }
             }
